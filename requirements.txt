@@ -1,0 +1,6 @@
+logging
+asyncio
+aiohttp
+pathlib
+requests
+ollama
