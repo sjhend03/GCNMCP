@@ -113,3 +113,76 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
                 "confidence": None,
                 "notes": "raw",
             }
+    if name == "check_for_grb_redshift_batch":
+        content = arguments.get("content")
+        circular_ids = arguments.get("circular_ids", [])
+        
+        model_name = "mistral"
+        system_prompt = """
+        You are analyzing multiple GRB circulars at once. Each circular is marked with ---CIRCULAR ID---.
+        
+        For EACH circular, determine:
+        1. Is it about a GRB?
+        2. Does it contain a redshift measurement?
+        
+        Return a JSON object where each key is the circular ID and the value contains the analysis.
+        
+        Format:
+        {
+            "GRB_0": {
+                "is_grb": true,
+                "grb_name": "071028B",
+                "has_redshift": true,
+                "z": 2.45,
+                "z_err": 0.05,
+                "confidence": 0.95
+            },
+            "GRB_1": {
+                "is_grb": true,
+                "grb_name": "080210A",
+                "has_redshift": false,
+                "z": null,
+                "z_err": null,
+                "confidence": 0.90
+            }
+        }
+        
+        CRITICAL: 
+        - Return ONLY valid JSON, no markdown
+        - Use null for missing values
+        - Use lowercase true/false
+        - grb_name should NOT include "GRB", just the number/letter combo
+        """
+        
+        prompt = f"Analyze these {len(circular_ids)} circulars:\n\n{content}"
+        
+        res = ollama.chat(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        raw = res["message"]["content"].strip()
+        
+        # Clean up markdown code blocks
+        if raw.startswith('```json'):
+            raw = raw.split('```json')[1]
+        if raw.startswith('```'):
+            raw = raw.split('```', 1)[1]
+        if raw.endswith('```'):
+            raw = raw.rsplit('```', 1)[0]
+        raw = raw.strip()
+        
+        try:
+            parsed = json.loads(raw)
+            return [TextContext(text=json.dumps(parsed))]
+        except Exception as e:
+            print("RAW BATCH MODEL OUTPUT:")
+            print(raw)
+            print(f"Parse error: {e}")
+            return [TextContext(text=json.dumps({
+                "error": str(e),
+                "raw": raw
+            }))]

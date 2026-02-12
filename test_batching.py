@@ -47,9 +47,9 @@ if __name__ == '__main__':
     grb_dict = dict(zip(swift_table['GRB'], swift_table['z_numeric']))
     swift_grbs = set(swift_table['GRB'])
 
-    start_file = 0
+    start_file = 6000
     end_file = len(paths)
-    BATCH_SIZE = 10  # Number of circulars per batch
+    BATCH_SIZE = 2  # Number of circulars per batch
     
     accurate = []
     matched_count = 0
@@ -108,42 +108,103 @@ if __name__ == '__main__':
             "circular_ids": list(masked_mapping.keys())
         })
         
-        results.append(grb_analysis)
-        batch_results = grb_analysis["result"]
+        print(f"Debug - grb_analysis: {grb_analysis}")  # DEBUG LINE
         
+        results.append(grb_analysis)
+        batch_results = grb_analysis.get("result")
+
+        if not batch_results:
+            print("No result returned")
+            continue
+
+        # unwrap TextContext
+        if isinstance(batch_results, list):
+            try:
+                batch_results = json.loads(batch_results[0]["text"])
+            except Exception as e:
+                print("Failed to parse batch JSON:", e)
+                print(batch_results)
+                continue
+        
+        if not isinstance(batch_results, dict):
+            print("Invalid batch result format:", batch_results)
+            continue
+
+        if "error" in batch_results:
+            print("LLM FAILED:", batch_results["error"])
+            print(batch_results["raw"][:300])  # preview only
+            continue
+
+
+        
+        # Check if batch_results is valid
+        if batch_results is None:
+            print(f"Warning: No results returned for batch {batch_start//BATCH_SIZE + 1}")
+            continue
+        
+        # Handle if result is a list instead of dict
+        if isinstance(batch_results, list):
+            # Assuming it returns a list in order
+            batch_results_dict = {list(masked_mapping.keys())[i]: batch_results[i] 
+                                   for i in range(len(batch_results))}
+            batch_results = batch_results_dict
+        
+        print(batch_results.items())
+        valid_cases = 0
+
         # Process batch results
         for masked_id, result in batch_results.items():
-            circ = masked_mapping[masked_id]
+
+            key = masked_id.upper()
+
+            if key not in masked_mapping:
+                print("WARNING: Unknown key from LLM:", masked_id)
+                continue
+
+            circ = masked_mapping[key]
             event_id = circ['event_id']
             actual_z = circ['actual_z']
-            
-            if result["has_redshift"] == True:
-                try:
-                    llm_z = float(result["z"])
-                    if abs(llm_z - actual_z) < 0.05:
-                        accurate.append(True)
-                        print(f"  ✓ {event_id}: LLM={llm_z:.3f}, Swift={actual_z:.3f}")
-                    else:
-                        accurate.append(False)
-                        print(f"  ✗ {event_id}: LLM={llm_z:.3f}, Swift={actual_z:.3f}")
-                        mismatches.append({
-                            "llm_z": llm_z,
-                            "actual_z": actual_z,
-                            "event_id": event_id,
-                            "subject": circ['subject'],
-                            "body": circ['body']
-                        })
-                except (ValueError, TypeError):
+
+            # ONLY evaluate if circular actually contains a redshift
+            if not result.get("has_redshift"):
+                print(f"  • {event_id}: No redshift in circular (skipped)")
+                continue
+
+            valid_cases += 1
+
+            try:
+                llm_z = float(result["z"])
+
+                if abs(llm_z - actual_z) < 0.05:
+                    accurate.append(True)
+                    print(f"  ✓ {event_id}: LLM={llm_z:.3f}, Swift={actual_z:.3f}")
+                else:
                     accurate.append(False)
-                    print(f"  ✗ {event_id}: Invalid value {result['z']}")
-            else:
-                accurate.append(False)
-                print(f"  ✗ {event_id}: Missed redshift")
+                    print(f"  ✗ {event_id}: LLM={llm_z:.3f}, Swift={actual_z:.3f}")
+
+                    mismatches.append({
+                        "llm_z": llm_z,
+                        "actual_z": actual_z,
+                        "event_id": event_id,
+                        "subject": circ['subject'],
+                        "body": circ['body']
+                    })
+
+            except (ValueError, TypeError):
+                print(f"  ⚠ {event_id}: Invalid extracted z → skipped")
+                continue
+
+            # STOP after 100 valid evaluations
+            if len(accurate) >= 100:
+                break
+
 
     print(f"\n=== SUMMARY ===")
     print(f"Files scanned: {i + 1}")
     print(f"Matched in Swift table: {matched_count}")
     print(f"Total LLM calls: {len(range(0, len(swift_circulars), BATCH_SIZE))}")
+    print("Evaluated samples:", valid_cases)
+
     if accurate:
         percentage = (accurate.count(True) / len(accurate)) * 100
         print(f"Accuracy: {percentage:.2f}%")
