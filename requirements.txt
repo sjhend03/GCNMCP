@@ -3,4 +3,5 @@ asyncio
 aiohttp
 pathlib
 requests
+pandas
 ollama

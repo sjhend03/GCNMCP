@@ -48,25 +48,47 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
         content = arguments.get("content")
         model_name = "mistral"
         system_prompt = """
-        You are an astrophysicist analyzing GCN circulars which are human written 
-        notes on observations in the sky.
-        Your task is to look at each GCN circualar and determine if the circular is 
-        about a GRB (Gamma ray burst) and if the circular has a labeled redshift.
+        You are an astrophysicist analyzing GCN circulars about astronomical observations.
 
-        ONLY return json in this format:
+        Your task:
+        1. Determine if the circular is about a GRB (Gamma-Ray Burst)
+        - Look for "GRB" in the subject line or body
+        - Look for GRB designations like "GRB 970828", "GRB970828", etc.
+
+        2. Determine if a redshift (z) measurement is reported
+        - Look for explicit mentions: "z =", "redshift", "z~", "at z of"
+        - Common phrases: "spectroscopic redshift", "photometric redshift"
+        - If no redshift is mentioned, has_redshift should be False
+
+        CRITICAL: If you see "GRB" followed by a date (like "GRB 970828"), that IS a GRB event.
+        CRITICAL: When returning the grb_name DO NOT INCLUDE GRB just the number and letter combo
+
+        Return ONLY valid JSON in this exact format:
         {
-                "is_grb": True/False,
-                "has_redshift": True/False,
-                "z": int/float,
-                "z_err": int/float,
-                "confidence": float (percentage out of 1),
-                "notes": "(body of the text)",
+            "is_grb": true,
+            "grb_name:" "071028B",
+            "has_redshift": false,
+            "z": null,
+            "z_err": null,
+            "confidence": 0.95,
+            "notes": "Brief explanation of your analysis"
         }
-"""
+
+        Rules:
+        - Use null (not None) for missing values
+        - Use lowercase true/false (not True/False)
+        - confidence is between 0 and 1
+        - Keep notes brief (1-2 sentences)
+        """
+
         prompt = f"""
-        analyze this circular:
-        {content}
-"""
+        Analyze this GCN circular:
+
+        Subject: {content.get('subject', 'N/A')}
+
+        Body:
+        {content.get('body', '')}
+        """
         res = ollama.chat(
             model=model_name,
             messages=[
