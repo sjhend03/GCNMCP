@@ -15,7 +15,9 @@ class MCPHTTPServer:
     async def handle_mcp_request(self, request):
         try:
             body = await request.json()
-            logger.info(f"Request: {body.get('method')}")
+            logger.info(f"Request method: {body.get('method')}")
+            logger.info(f"Request params: {body.get('params')}")
+
 
             method = body.get("method")
             params = body.get("params", {})
@@ -35,7 +37,7 @@ class MCPHTTPServer:
                 tools = await list_tools()
                 result = {
                     "tools": [
-                        {"name": t.name, "description": t.description}
+                        {"name": t.name, "description": t.description, "input_schema": t.input_schema}
                         for t in tools
                     ]
                 }
@@ -56,8 +58,10 @@ class MCPHTTPServer:
                             })
                         else:
                             normalized.append(item)
+                    print(f"Call results{normalized}")
                     result = normalized
                 else:
+                    print(f"Call results{content}")
                     result = content
 
             else:

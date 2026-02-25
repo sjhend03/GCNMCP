@@ -4,48 +4,80 @@ from TextContext import TextContext
 import ollama
 from pathlib import Path
 from typing import Dict, Any, List
-import asyncio
 import json
+import re
 
 async def list_tools() -> List[Tool]:
     return [
         Tool(
-            name="fetch_gcn_circular_name_local",
-            description="List local circular JSON files"
+            name="fetch_gcn_circulars",
+            description="Browses and previews multiple NASA GCN circulars.",
+            input_schema={
+                "properties": {
+                    "start_index": {"type": "integer", "description": "Index to start from, defaults to 0"},
+                    "end_index": {"type": "integer", "description": "Index to stop at (exclusive), defaults to end of list"}
+                }
+            }
         ),
         Tool(
-            name="fetch_gcn_circular_local",
-            description="Load one or more circular JSON files"
+            name="fetch_and_check_circular_for_grb",
+            description="Fetches a singular circular and then check it for GRB relavent GRB information.",
+            input_schema={
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "Index of circular to load and check for GRB"
+                    }
+                }
+            }
         ),
         Tool(
-            name="check_circular_for_grb",
-            description="Use LLM to extract GRB redshift info"
-        ),
+            name="check_for_grb_regex",
+            description="Checks a circulars subject for the word GRB USING REGEX and returns True of False",
+            input_schema={
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "Index of circular to load and check for GRB"
+                    }
+                }
+            }
+        )
     ]
 
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
 
-    if name == "fetch_gcn_circular_name_local":
-        data_dir = Path(arguments.get("data_dir_name", "./data"))
+    if name == "fetch_gcn_circulars":
+        data_dir = Path("./data")
         json_files = sorted(data_dir.glob("*.json"))
-        return [str(f) for f in json_files]
-    
-    if name == "load_gcn_circular":
-        path = arguments.get("path")
-        encoding = arguments.get("encoding", "utf-8")
-        try:
-            loop = asyncio.get_event_loop()
-            content = await loop.run_in_executor(
-                None,
-                lambda: Path(path).read_text(encoding=encoding)
-            )
-
-            return [TextContext(text=content)]
-        except Exception as e:
-            return [TextContext(text=e)]
         
-    if name == "check_for_grb_redshift":
-        content = arguments.get("content")
+        start_index = arguments.get("start_index", 0)
+        end_index = arguments.get("end_index", None)
+        selected = json_files[start_index:end_index]
+        
+        results = []
+        for f in selected:
+            try:
+                content = f.read_text(encoding="utf-8")
+                results.append(TextContext(text=content))
+            except Exception as e:
+                results.append(TextContext(text=f"Error reading {f}: {e}"))
+        
+        return results
+        
+    if name == "fetch_and_check_circular_for_grb":
+        print("Running fetch and check circular for grb")
+        data_dir = Path("./data")
+        json_files = sorted(data_dir.glob("*.json"))
+        index = arguments.get("index", 0)
+
+        circular = json_files[index]        
+        
+        if isinstance(circular, str):
+            try:
+                content = json.loads(circular)
+            except Exception as e:
+                return [TextContext(text=f"Error parsing content: {e}")]
         model_name = "mistral"
         system_prompt = """
         You are an astrophysicist analyzing GCN circulars about astronomical observations.
@@ -84,10 +116,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
         prompt = f"""
         Analyze this GCN circular:
 
-        Subject: {content.get('subject', 'N/A')}
-
-        Body:
-        {content.get('body', '')}
+        {circular}
         """
         res = ollama.chat(
             model=model_name,
@@ -99,90 +128,35 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
 
         raw = res["message"]["content"].strip()
 
-        try:
-            parsed = json.loads(raw)
-            return parsed
-        except Exception:
-            print("RAW MODEL OUTPUT:")
-            print(raw)
-            return {
-                "is_grb": False,
-                "has_redshift": False,
-                "z": None,
-                "z_err": None,
-                "confidence": None,
-                "notes": "raw",
-            }
-    if name == "check_for_grb_redshift_batch":
-        content = arguments.get("content")
-        circular_ids = arguments.get("circular_ids", [])
-        
-        model_name = "mistral"
-        system_prompt = """
-        You are analyzing multiple GRB circulars at once. Each circular is marked with ---CIRCULAR ID---.
-        
-        For EACH circular, determine:
-        1. Is it about a GRB?
-        2. Does it contain a redshift measurement?
-        
-        Return a JSON object where each key is the circular ID and the value contains the analysis.
-        
-        Format:
-        {
-            "GRB_0": {
-                "is_grb": true,
-                "grb_name": "071028B",
-                "has_redshift": true,
-                "z": 2.45,
-                "z_err": 0.05,
-                "confidence": 0.95
-            },
-            "GRB_1": {
-                "is_grb": true,
-                "grb_name": "080210A",
-                "has_redshift": false,
-                "z": null,
-                "z_err": null,
-                "confidence": 0.90
-            }
-        }
-        
-        CRITICAL: 
-        - Return ONLY valid JSON, no markdown
-        - Use null for missing values
-        - Use lowercase true/false
-        - grb_name should NOT include "GRB", just the number/letter combo
-        """
-        
-        prompt = f"Analyze these {len(circular_ids)} circulars:\n\n{content}"
-        
-        res = ollama.chat(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        raw = res["message"]["content"].strip()
-        
-        # Clean up markdown code blocks
-        if raw.startswith('```json'):
-            raw = raw.split('```json')[1]
-        if raw.startswith('```'):
-            raw = raw.split('```', 1)[1]
-        if raw.endswith('```'):
-            raw = raw.rsplit('```', 1)[0]
-        raw = raw.strip()
-        
+        # Try direct parse first
         try:
             parsed = json.loads(raw)
             return [TextContext(text=json.dumps(parsed))]
-        except Exception as e:
-            print("RAW BATCH MODEL OUTPUT:")
-            print(raw)
-            print(f"Parse error: {e}")
-            return [TextContext(text=json.dumps({
-                "error": str(e),
-                "raw": raw
-            }))]
+        except Exception:
+            pass
+
+        # Try to extract JSON from markdown code blocks or anywhere in the response
+        json_match = re.search(r'\{[^{}]*"is_grb"[^{}]*\}', raw, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group())
+                return [TextContext(text=json.dumps(parsed))]
+            except Exception:
+                pass
+
+        print("RAW MODEL OUTPUT:")
+        print(raw)
+        return [TextContext(text=json.dumps({...}))]  # fallback
+
+    if name == "check_for_grb_regex":
+        data_dir = Path("./data")
+        json_files = sorted(data_dir.glob("*.json"))
+        index = arguments.get("index", 0)
+        circular = json.loads(json_files[index].read_text(encoding="utf-8"))
+        subject = circular.get("subject", "")
+
+        match = re.search(r'GRB\s*(\d{6}\w?)', subject, re.IGNORECASE)
+        if match:
+            return [TextContext(text="True")]
+        else:
+            return [TextContext(text="False")]
