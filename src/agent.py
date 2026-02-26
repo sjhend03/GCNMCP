@@ -5,45 +5,55 @@ import re
 
 
 class MCPAgent:
-
+    """
+    Middleware that connects a locally run LLM to a locally run MCP server
+    """
     def __init__(self):
         self.llm = LocalLLM()
         self.client = MCPClient()
 
-        self.tools = self.client.list_tools()  # list of full tool dicts
+        # Initialize tools that can be seen by local LLM
+        self.tools = self.client.list_tools() 
 
         # Build a richer description including argument schemas
         tool_desc = "\n\n".join(
             self._format_tool(t) for t in self.tools
         )
-
+        
+        # System prompt that tells the local LLM how to interact with the tools on the mcp server
         self.system_prompt = f"""
-You are a tool-using assistant.
+        You are a tool-calling assistant. When the user asks you to fetch, analyze, or do anything with data, you MUST call a tool immediately.
 
-AVAILABLE TOOLS:
-{tool_desc}
+        TO CALL A TOOL respond in EXACTLY this format and nothing else:
+        TOOL: tool_name {{"arg": "value"}}
 
-RULES:
-- NEVER invent tool results.
-- When a tool response is provided, base your answer ONLY on that data.
-- If the tool returned a list, display that list exactly.
-- If tool output is empty, say no results found.
-- Do NOT fabricate filenames or data.
-- You may call tools multiple times in sequence to complete a task.
-- When asked to load the "first N" files, first list the files, then call fetch_gcn_circular_local
-  with a "paths" list containing exactly those N file path strings.
+        Example:
+        TOOL: fetch_gcn_circulars {{"start_index": 0, "end_index": 10}}
 
-TO CALL A TOOL:
-Respond ONLY in this exact format (one tool call per response):
-TOOL: tool_name {{"arg": "value"}}
+        AVAILABLE TOOLS:
+        {tool_desc}
 
-Otherwise answer normally.
-"""
-        self.messages = [{"role": "system", "content": self.system_prompt}]
+        RULES:
+        - ALWAYS call a tool when the user asks for data. Never describe, explain, or write code instead.
+        - NEVER invent tool results.
+        - NEVER write shell commands, aliases, code, or anything other than a TOOL: call when fetching data.
+        - When a tool response is provided, base your answer ONLY on that data.
+        - After receiving a tool result, either call another tool or give a brief answer. Never repeat the raw data back.
+        - If tool output is empty, say no results found.
+        - After receiving a tool result, respond in ONE sentence only. No code, no explanations, no examples.
+        - NEVER reference functions, code, or methods that don't exist as tools.
+        - NEVER include code blocks in your responses.
+        - ONLY use argument names that are explicitly listed in the tool schema. Never invent new argument names.
+        """
+        self.messages = [{"role": "system", "content": self.system_prompt}] # Keeps memory of previous chats and adds them to the system prompt
 
     def _format_tool(self, tool: dict) -> str:
+        """
+        Helper function to organize the tools the local LLM can see in a way
+        it understands how each tool works and how to format it's reponses
+        """
         lines = [f"- {tool['name']}: {tool['description']}"]
-        schema = tool.get("input_schema", {})
+        schema = tool.get("input_schema", {}) # Tells llm how to use the available argument of each tool
         props = schema.get("properties", {})
         if props:
             lines.append("  Arguments:")
@@ -55,18 +65,30 @@ Otherwise answer normally.
 
     def run(self, prompt):
         self.messages.append({"role": "user", "content": prompt})
-        with open("memory.txt", "a") as file:
+        with open("memory.txt", "w") as file:
             file.write(json.dumps(self.messages, indent=2))
+
         while True:
             reply = self.llm.chat(self.messages).strip()
+            print(f"[LLM RAW] {reply}")
             self.messages.append({"role": "assistant", "content": reply})
 
+            # No tool call — just a conversational response
             if "TOOL:" not in reply:
                 return reply
 
+            # Parse and call tool
             name, args = self.parse_tool(reply)
             result = self.client.call(name, args)
-            print("[TOOL RESULT]", result)
+
+            print(f"[TOOL RESULT] {len(result)} items returned")
+            for i, item in enumerate(result):
+                text = item.get("text", "")
+                try:
+                    parsed = json.loads(text)
+                    print(f"  [{i}]: subject={parsed.get('subject')} | body={parsed.get('body', '')[:300]}...")
+                except Exception:
+                    print(f"  [{i}]: {text[:200]}")
 
             self.messages.append({
                 "role": "tool",
@@ -74,6 +96,9 @@ Otherwise answer normally.
             })
 
     def parse_tool(self, text):
+        """
+        Helper tool for parsing the LLM's output to see if there is a tool call
+        """
         match = re.search(
             r"TOOL:\s*([a-zA-Z0-9_\-]+)\s*(\{.*?\})",
             text,
@@ -81,10 +106,9 @@ Otherwise answer normally.
         )
 
         if not match:
-            raise ValueError("No tool call detected")
+            raise ValueError(f"Expected tool call but none found in: {text}")
 
         name = match.group(1)
-
         try:
             args = json.loads(match.group(2))
         except Exception:

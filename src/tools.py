@@ -8,14 +8,18 @@ import json
 import re
 
 async def list_tools() -> List[Tool]:
+    """
+    Lists all tools with their name, descriptions, and input schema (args)
+    """
     return [
         Tool(
             name="fetch_gcn_circulars",
             description="Browses and previews multiple NASA GCN circulars.",
             input_schema={
                 "properties": {
-                    "start_index": {"type": "integer", "description": "Index to start from, defaults to 0"},
-                    "end_index": {"type": "integer", "description": "Index to stop at (exclusive), defaults to end of list"}
+                    "data_dir": {"type": "string", "description": "Local directory to load the circulars from, leave blank if not specified"},
+                    "start_index": {"type": "integer", "description": "Index of the first file to fetch, 0-based. To fetch a single file at position N, set start_index=N and end_index=N+1"},
+                    "end_index": {"type": "integer", "description": "Index to stop at (exclusive). To fetch a single file at position N, set start_index=N and end_index=N+1. Example: start=10, end=11 fetches one file."}
                 }
             }
         ),
@@ -27,6 +31,10 @@ async def list_tools() -> List[Tool]:
                     "index": {
                         "type": "integer",
                         "description": "Index of circular to load and check for GRB"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Name of the LLM on Ollama to use for prompting, leave blank if none specified"
                     }
                 }
             }
@@ -46,39 +54,33 @@ async def list_tools() -> List[Tool]:
     ]
 
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
-
+    """
+    Runs specified tool with specified arguments.
+    name: tool name
+    arguements: arguments for the specified tool to use
+    """
     if name == "fetch_gcn_circulars":
-        data_dir = Path("./data")
-        json_files = sorted(data_dir.glob("*.json"))
-        
-        start_index = arguments.get("start_index", 0)
-        end_index = arguments.get("end_index", None)
-        selected = json_files[start_index:end_index]
-        
-        results = []
-        for f in selected:
-            try:
-                content = f.read_text(encoding="utf-8")
-                results.append(TextContext(text=content))
-            except Exception as e:
-                results.append(TextContext(text=f"Error reading {f}: {e}"))
-        
+        """
+        Fetchs gcn circulars from a local directory with a specified start index as the first 
+        circular to fetch up to the end index.
+        """
+        results = load_circular_files(arguments.get("data_dir", "./data"), arguments.get("start_index"), arguments.get("end_index"))
         return results
         
     if name == "fetch_and_check_circular_for_grb":
-        print("Running fetch and check circular for grb")
-        data_dir = Path("./data")
-        json_files = sorted(data_dir.glob("*.json"))
+        """
+        Fetches a singular circular and prompts an LLM to check if the circular is about a GRB
+        and if so to extract relevant information
+        """
         index = arguments.get("index", 0)
-
-        circular = json_files[index]        
+        circular = load_circular_files("./data", index, index)[0]      
         
-        if isinstance(circular, str):
+        if isinstance(circular, str): # Ensure type
             try:
                 content = json.loads(circular)
             except Exception as e:
                 return [TextContext(text=f"Error parsing content: {e}")]
-        model_name = "mistral"
+        model_name = arguments.get("model", "mistral")
         system_prompt = """
         You are an astrophysicist analyzing GCN circulars about astronomical observations.
 
@@ -114,9 +116,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
         """
 
         prompt = f"""
-        Analyze this GCN circular:
+        Analyze this GCN circular to determine wether it is about a GRB and if so, extract the relevant data specified in the system prompt:
 
-        {circular}
+        {content}
         """
         res = ollama.chat(
             model=model_name,
@@ -146,9 +148,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
 
         print("RAW MODEL OUTPUT:")
         print(raw)
-        return [TextContext(text=json.dumps({...}))]  # fallback
+        return [TextContext(text=json.dumps({...}))]  # If parsing does't work dump everything
 
     if name == "check_for_grb_regex":
+        """
+        Uses regex to check if a circular is about a GRB
+        """
         data_dir = Path("./data")
         json_files = sorted(data_dir.glob("*.json"))
         index = arguments.get("index", 0)
@@ -160,3 +165,28 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
             return [TextContext(text="True")]
         else:
             return [TextContext(text="False")]
+        
+def load_circular_files(data_dir, start_index, end_index):
+    """
+    Helper function to load local circulars starting from start_index and ending with end_index
+    start_index: first index to load 
+    end_index: index to stop loading
+    """
+    data_dir = Path(data_dir)
+    json_files = sorted(data_dir.glob("*.json"))
+
+    # If start and end are the same, user wants a single file
+    if end_index is not None and end_index == start_index:
+        end_index = start_index + 1
+
+    selected = json_files[start_index:end_index]
+    
+    results = []
+    for f in selected:
+        try:
+            content = f.read_text(encoding="utf-8")
+            results.append(TextContext(text=content))
+        except Exception as e:
+            results.append(TextContext(text=f"Error reading {f}: {e}"))
+    
+    return results

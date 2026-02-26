@@ -1,7 +1,11 @@
 import requests
 
 class LocalLLM:
-
+    """
+    Runs a local LLM using Ollama, if another method is used, the localhost post call
+    must be updated.
+    model: LLM model that is used locally
+    """
     def __init__(self, model="mistral"):
         self.model = model
 

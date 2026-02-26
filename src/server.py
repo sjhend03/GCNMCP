@@ -7,12 +7,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class MCPHTTPServer:
+    """
+    MCP server that handles calls to endpoints tools/call and tools/list
+    port: port that the MCP server will run on the local host
+    """
     def __init__(self, port: int = 8080):
         self.port = port
         self.app = web.Application()
         self.app.router.add_post('/mcp', self.handle_mcp_request)
 
     async def handle_mcp_request(self, request):
+        """
+        Handler function for any web request to the mcp server
+        """
         try:
             body = await request.json()
             logger.info(f"Request method: {body.get('method')}")
@@ -33,7 +40,7 @@ class MCPHTTPServer:
                     }
                 }
 
-            elif method == "tools/list":
+            elif method == "tools/list": # Handles list tools requests
                 tools = await list_tools()
                 result = {
                     "tools": [
@@ -42,10 +49,10 @@ class MCPHTTPServer:
                     ]
                 }
 
-            elif method == "tools/call":
+            elif method == "tools/call": # Handles tool call requests
                 tool_name = params.get("name")
                 arguments = params.get("arguments", {})
-                content = await call_tool(tool_name, arguments)
+                content = await call_tool(tool_name, arguments) # Tool call
 
                 # Normalize output so JSON serialization always works
                 if isinstance(content, list):
@@ -75,7 +82,7 @@ class MCPHTTPServer:
 
             return web.json_response(
                 response,
-                headers={"Access-Control-Allow-Origin": "*"}
+                headers={"Access-Control-Allow-Origin": "*"} # Make sure it works with CORS
             )
 
         except Exception as e:
@@ -89,7 +96,7 @@ class MCPHTTPServer:
                 status=500
             )
 
-    async def start(self):
+    async def start(self): # Starts server
         runner = web.AppRunner(self.app)
         await runner.setup()
         site = web.TCPSite(runner, "localhost", self.port)
