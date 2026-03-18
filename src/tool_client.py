@@ -22,8 +22,13 @@ class MCPClient:
                 "params": params or {}
             }
         )
-        print(r)
-        return r.json()["result"]
+        r.raise_for_status()
+        payload = r.json()
+        if "result" in payload:
+            return payload["result"]
+        if "error" in payload:
+            raise RuntimeError(f"Tool server error: {payload['error']}")
+        raise RuntimeError(f"Unexpected tool response: {payload}")
 
     def _initialize(self): # Initializes server
         self._post("initialize")

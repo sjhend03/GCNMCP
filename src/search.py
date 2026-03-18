@@ -1,0 +1,171 @@
+import sqlite3
+from pathlib import Path
+from typing import Any, Optional
+import re
+
+from db import get_connection
+from utils import normalize_event, extract_event_from_query
+
+
+def row_to_result(row: sqlite3.Row) -> dict[str, Any]:
+    """
+    Convert a SQLite row into a plain Python dict for search results.
+    """
+    return {
+        "circular_id": row["circular_id"],
+        "primary_event": row["primary_event_raw"],
+        "primary_event_norm": row["primary_event_norm"],
+        "subject": row["subject"],
+        "created_on": row["created_on"],
+        "extraction_source": row["extraction_source"],
+        "snippet": row["snippet"],
+        "score": row["score"],
+    }
+
+
+def parse_fts_terms(query: str) -> str:
+    stopwords = {"for", "the", "and", "with", "from", "into", "that", "this", "reports"}
+    terms = re.findall(r"[A-Za-z0-9_+.\-]+", query.lower())
+    filtered = [term for term in terms if len(term) > 1 and term not in stopwords]
+
+    if not filtered:
+        return '""'
+
+    return " AND ".join(filtered)
+
+
+def search_circulars(
+    db_path: str | Path,
+    query: str = "",
+    event: Optional[str] = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Search circulars by keyword, optionally filtered by event.
+
+    Ranking:
+    - 3: exact primary event match
+    - 2: secondary event match
+    - 1: text-only match
+    """
+    connection = get_connection(db_path)
+
+    inferred_event = extract_event_from_query(query or "")
+    event_norm = normalize_event(event) if event else inferred_event
+    keyword_query = remove_event_from_query(query or "", event or inferred_event)
+
+    if keyword_query:
+        sql = """
+        SELECT DISTINCT
+            c.circular_id,
+            c.primary_event_raw,
+            c.primary_event_norm,
+            c.subject,
+            c.created_on,
+            c.extraction_source,
+            snippet(circulars_fts, 1, '[', ']', ' ... ', 18) AS snippet,
+            CASE
+                WHEN c.primary_event_norm = ? THEN 3
+                WHEN e.event_norm = ? THEN 2
+                ELSE 1
+            END AS score
+        FROM circulars_fts
+        JOIN circulars c ON circulars_fts.rowid = c.circular_id
+        LEFT JOIN circular_events e ON e.circular_id = c.circular_id
+        WHERE circulars_fts MATCH ?
+        """
+        params: list[Any] = [event_norm, event_norm, parse_fts_terms(keyword_query)]
+
+        if event_norm:
+            sql += " AND (c.primary_event_norm = ? OR e.event_norm = ?)"
+            params.extend([event_norm, event_norm])
+
+    else:
+        sql = """
+        SELECT DISTINCT
+            c.circular_id,
+            c.primary_event_raw,
+            c.primary_event_norm,
+            c.subject,
+            c.created_on,
+            c.extraction_source,
+            substr(c.body, 1, 320) AS snippet,
+            CASE
+                WHEN c.primary_event_norm = ? THEN 3
+                WHEN e.event_norm = ? THEN 2
+                ELSE 1
+            END AS score
+        FROM circulars c
+        LEFT JOIN circular_events e ON e.circular_id = c.circular_id
+        WHERE 1=1
+        """
+        params = [event_norm, event_norm]
+
+        if event_norm:
+            sql += " AND (c.primary_event_norm = ? OR e.event_norm = ?)"
+            params.extend([event_norm, event_norm])
+
+    sql += " ORDER BY score DESC, c.created_on DESC, c.circular_id DESC LIMIT ?"
+    params.append(limit)
+
+    rows = connection.execute(sql, params).fetchall()
+    connection.close()
+
+    return [row_to_result(row) for row in rows]
+
+
+def get_event_circulars(
+    db_path: str | Path,
+    event: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    Return circulars associated with one specific event.
+    """
+    return search_circulars(db_path=db_path, query="", event=event, limit=limit)
+
+
+def get_circular(
+    db_path: str | Path,
+    circular_id: int,
+) -> Optional[dict[str, Any]]:
+    """
+    Fetch one circular by circular ID.
+    """
+    connection = get_connection(db_path)
+
+    row = connection.execute(
+        """
+        SELECT
+            c.circular_id,
+            c.primary_event_raw,
+            c.primary_event_norm,
+            c.subject,
+            c.created_on,
+            c.extraction_source,
+            c.body AS snippet,
+            0 AS score
+        FROM circulars c
+        WHERE c.circular_id = ?
+        """,
+        (circular_id,),
+    ).fetchone()
+
+    connection.close()
+
+    return row_to_result(row) if row else None
+
+def remove_event_from_query(query: str, event: str | None) -> str:
+    """
+    Remove the inferred/explicit event string from the free-text query
+    so the FTS search only uses descriptive terms.
+    """
+    if not event:
+        return query
+
+    event_no_space = re.escape(event.replace(" ", ""))
+    event_with_optional_space = re.escape(event).replace(r"\ ", r"\s*")
+
+    pattern = rf"\b(?:{event_with_optional_space}|{event_no_space})\b"
+    cleaned = re.sub(pattern, " ", query, flags=re.IGNORECASE)
+    return " ".join(cleaned.split())
