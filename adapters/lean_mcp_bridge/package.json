@@ -1,0 +1,14 @@
+{
+  "name": "gcnmcp-leanmcp-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "leanmcp dev",
+    "build": "leanmcp build"
+  },
+  "dependencies": {
+    "@leanmcp/core": "latest",
+    "reflect-metadata": "^0.2.2"
+  }
+}
