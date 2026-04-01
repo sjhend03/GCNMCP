@@ -8,7 +8,7 @@ import json
 import re
 import ollama
 
-from search import search_circulars, get_circular, get_event_circulars
+from search import search_circulars
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -47,7 +47,13 @@ async def list_tools() -> List[Tool]:
     return [
         Tool(
             name="fetch_gcn_circulars",
-            description="Browse and preview raw NASA GCN circular JSON files by file index.",
+            description=(
+                "Load raw GCN circular JSON files by local file index range. "
+                "Use this only when the user explicitly asks for raw circular files, raw JSON, "
+                "or a specific file index range. "
+                "This returns the raw contents of the files from start_index up to but not including end_index. "
+                "Do not use this for keyword search."
+            ),
             input_schema={
                 "properties": {
                     "data_dir": {
@@ -56,7 +62,7 @@ async def list_tools() -> List[Tool]:
                     },
                     "start_index": {
                         "type": "integer",
-                        "description": "Start file index (0-based)"
+                        "description": "Start file index (0-based, inclusive)"
                     },
                     "end_index": {
                         "type": "integer",
@@ -66,68 +72,51 @@ async def list_tools() -> List[Tool]:
                 "required": ["start_index", "end_index"]
             }
         ),
+
         Tool(
             name="search_gcn_circulars",
-            description="Search indexed GCN circulars using keyword search, optional event filtering, and fast SQLite FTS lookup.",
+            description=(
+                "Search indexed GCN circulars by keyword in the subject and body text. "
+                "Use this for general searches such as 'redshift', 'GRB', 'afterglow', or 'optical counterpart'. "
+                "If the user asks for a specific number of results, always set the limit field to that number. "
+                "The event field is optional and should only be used for an exact specific event name such as "
+                "'GRB 260120B' or 'EP260119a'. "
+                "Do not use broad values like 'GRB' in the event field."
+            ),
             input_schema={
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Keyword query, e.g. 'optical counterpart' or 'redshift z'"
+                        "description": "Keyword query to search in indexed subject/body text, e.g. 'redshift' or 'optical counterpart'"
                     },
                     "event": {
                         "type": "string",
-                        "description": "Optional explicit event filter, e.g. 'GRB 260120B' or 'EP260119a'"
+                        "description": "Optional exact event name only, e.g. 'GRB 260120B' or 'EP260119a'"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of results to return"
+                        "description": "Maximum number of results to return; set this when the user asks for a specific number"
                     },
                 }
             }
         ),
-        Tool(
-            name="get_event_circulars",
-            description="Return circulars associated with a specific event, sorted by score and recency.",
-            input_schema={
-                "properties": {
-                    "event": {
-                        "type": "string",
-                        "description": "Event name, e.g. 'GRB 260120B'"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return"
-                    },
-                },
-                "required": ["event"]
-            }
-        ),
-        Tool(
-            name="get_gcn_circular",
-            description="Fetch one indexed GCN circular by circular ID.",
-            input_schema={
-                "properties": {
-                    "circular_id": {
-                        "type": "integer",
-                        "description": "GCN circular ID, e.g. 43483"
-                    },
-                },
-                "required": ["circular_id"]
-            }
-        ),
+
         Tool(
             name="fetch_and_check_circular_for_grb",
-            description="Fetch one raw circular by file index and use an Ollama model to determine whether it is about a GRB and whether it reports a redshift.",
+            description=(
+                "Load one raw circular by local file index and use an LLM to decide whether it is about a GRB "
+                "and whether it reports a redshift. "
+                "Use this only when the user explicitly asks to analyze one specific raw circular file."
+            ),
             input_schema={
                 "properties": {
                     "index": {
                         "type": "integer",
-                        "description": "File index of circular to load"
+                        "description": "File index of the raw circular JSON file to load"
                     },
                     "model": {
                         "type": "string",
-                        "description": "Ollama model name, e.g. 'mistral' or 'llama3.1:8b'"
+                        "description": "Ollama model name to use for analysis, e.g. 'mistral' or 'llama3.1:8b'"
                     },
                     "data_dir": {
                         "type": "string",
@@ -137,14 +126,18 @@ async def list_tools() -> List[Tool]:
                 "required": ["index"]
             }
         ),
+
         Tool(
             name="check_for_grb_regex",
-            description="Check whether a raw circular subject contains a GRB identifier using regex.",
+            description=(
+                "Load one raw circular by local file index and check whether its subject line contains a GRB designation using regex. "
+                "Use this only for a fast regex check on one specific raw circular file."
+            ),
             input_schema={
                 "properties": {
                     "index": {
                         "type": "integer",
-                        "description": "File index of circular to load"
+                        "description": "File index of the raw circular JSON file to load"
                     },
                     "data_dir": {
                         "type": "string",
@@ -175,42 +168,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
                 limit=int(arguments.get("limit", 10)),
             )
             return format_search_results(results)
-        except Exception as e:
-            return [TextContext(text=f"Error in {name}: {e}")]
-
-    if name == "get_event_circulars":
-        try:
-            event = arguments["event"]
-            results = get_event_circulars(
-                db_path=DEFAULT_DB_PATH,
-                event=event,
-                limit=int(arguments.get("limit", 20)),
-            )
-            return format_search_results(results, empty_message=f"No circulars found for event {event}.")
-        except Exception as e:
-            return [TextContext(text=f"Error in {name}: {e}")]
-
-    if name == "get_gcn_circular":
-        try:
-            result = get_circular(
-                db_path=DEFAULT_DB_PATH,
-                circular_id=int(arguments["circular_id"]),
-            )
-
-            if result is None:
-                return [TextContext(text=f"No circular found for circular_id={arguments['circular_id']}.")]
-
-            return [
-                TextContext(
-                    text=(
-                        f"Circular ID: {result['circular_id']}\n"
-                        f"Primary event: {result['primary_event']}\n"
-                        f"Subject: {result['subject']}\n"
-                        f"Created on: {format_timestamp(result['created_on'])}\n"
-                        f"Body:\n{result['snippet'] or ''}"
-                    )
-                )
-            ]
         except Exception as e:
             return [TextContext(text=f"Error in {name}: {e}")]
 

@@ -10,6 +10,8 @@ class LocalLLM:
         self.model = model
 
     def chat(self, messages):
+        print(f"Sending {len(messages)} messages")
+        print(f"Approx chars: {sum(len(str(m)) for m in messages)}")
 
         r = requests.post(
             "http://localhost:11434/api/chat",
@@ -17,7 +19,13 @@ class LocalLLM:
                 "model": self.model,
                 "messages": messages,
                 "stream": False
-            }
+            },
+            timeout=360,
         )
+        r.raise_for_status()
         response = r.json()
+        if not response.get("message") or not response["message"].get("content"):
+            print(response)
+            return "Error: Missing message or content"
+
         return response["message"]["content"]

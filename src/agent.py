@@ -9,7 +9,7 @@ class MCPAgent:
     Middleware that connects a locally run LLM to a locally run MCP server
     """
     def __init__(self):
-        self.llm = LocalLLM()
+        self.llm = LocalLLM(model="qwen2.5:3b")
         self.client = MCPClient()
 
         # Initialize tools that can be seen by local LLM
@@ -34,6 +34,8 @@ class MCPAgent:
         {tool_desc}
 
         RULES:
+        - Do not use the TOOL: syntax UNLESS to call a tool that the user REQUESTED!
+        - Do not call a tool unless the user explicitly asks for data or an analysis that requires data. If the user is just asking for general information, you can respond without calling a tool.
         - ALWAYS call a tool when the user asks for data. Never describe, explain, or write code instead.
         - NEVER invent tool results.
         - NEVER write shell commands, aliases, code, or anything other than a TOOL: call when fetching data.
