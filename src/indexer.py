@@ -2,21 +2,59 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Any, Iterable
+from decimal import Decimal, InvalidOperation
 
-from db import get_connection
-from utils import clean_text, normalize_event, extract_event_regex
+from src.db import get_connection
+from src.utils import clean_text, normalize_event, extract_event_regex
 
 def sha1_text(text: str) -> str:
     """
     Returns a SHA1 hash of the input string.
     """
     return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
+def parse_circular_id(value: Any) -> tuple[str | None, int | None]:
+    """
+    Returns:
+      circular_id_raw: exact normalized string form
+      circular_id_int: integer value if the ID is a true integer, else None
+    """
+    if value is None:
+        return None, None
+
+    # ints
+    if isinstance(value, int):
+        return str(value), value
+
+    # floats
+    if isinstance(value, float):
+        raw = format(value, "g")
+        if value.is_integer():
+            return str(int(value)), int(value)
+        return raw, None
+
+    # strings / other
+    text = str(value).strip()
+    if not text:
+        return None, None
+
+    try:
+        dec = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return text, None
+
+    if dec == dec.to_integral_value():
+        return str(int(dec)), int(dec)
+
+    return text, None
 
 def upsert_circular(conn, record: dict[str, Any]) -> None:
     """
     Insert or update a circular record.
     """
-    circular_id = int(record["circularId"])
+    circular_id_raw, circular_id_int = parse_circular_id(record.get("circularId"))
+    if circular_id_raw is None:
+        raise ValueError("Record is missing circularId")
+
     subject = clean_text(record.get("subject"))
     body = clean_text(record.get("body"))
     created_on = record.get("createdOn")
@@ -27,13 +65,13 @@ def upsert_circular(conn, record: dict[str, Any]) -> None:
     record_hash = sha1_text(json.dumps(record, sort_keys=True, ensure_ascii=False))
 
     existing = conn.execute(
-        "SELECT record_hash FROM circulars WHERE circular_id = ?",
-        (circular_id,),
+        "SELECT record_hash FROM circulars WHERE circular_id_raw = ?",
+        (circular_id_raw,),
     ).fetchone()
 
     if existing and existing["record_hash"] == record_hash:
         return
-    
+
     primary_event_raw, all_events, extraction_source = extract_event_regex(record)
     primary_event_norm = normalize_event(primary_event_raw)
 
@@ -43,7 +81,8 @@ def upsert_circular(conn, record: dict[str, Any]) -> None:
     conn.execute(
         """
         INSERT INTO circulars (
-            circular_id,
+            circular_id_raw,
+            circular_id_int,
             subject,
             body,
             created_on,
@@ -56,8 +95,9 @@ def upsert_circular(conn, record: dict[str, Any]) -> None:
             llm_confidence,
             record_hash
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(circular_id) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(circular_id_raw) DO UPDATE SET
+            circular_id_int=excluded.circular_id_int,
             subject=excluded.subject,
             body=excluded.body,
             created_on=excluded.created_on,
@@ -69,10 +109,10 @@ def upsert_circular(conn, record: dict[str, Any]) -> None:
             extraction_source=excluded.extraction_source,
             llm_confidence=excluded.llm_confidence,
             record_hash=excluded.record_hash
-        """
-        ,
+        """,
         (
-            circular_id,
+            circular_id_raw,
+            circular_id_int,
             subject,
             body,
             created_on,
@@ -87,27 +127,28 @@ def upsert_circular(conn, record: dict[str, Any]) -> None:
         ),
     )
 
-    conn.execute("DELETE FROM circular_events WHERE circular_id = ?", (circular_id,))
+    conn.execute("DELETE FROM circular_events WHERE circular_id_raw = ?", (circular_id_raw,))
     for event_norm in all_events:
         conn.execute(
             """
-            INSERT OR IGNORE INTO circular_events (circular_id, event_norm, is_primary)
+            INSERT OR IGNORE INTO circular_events (circular_id_raw, event_norm, is_primary)
             VALUES (?, ?, ?)
             """,
             (
-                circular_id,
+                circular_id_raw,
                 event_norm,
                 1 if event_norm == primary_event_norm else 0,
             ),
         )
-    conn.execute("DELETE FROM circulars_fts WHERE rowid = ?", (circular_id,))
+
+    conn.execute("DELETE FROM circulars_fts WHERE circular_id_raw = ?", (circular_id_raw,))
     conn.execute(
         """
-        INSERT INTO circulars_fts (rowid, subject, body)
+        INSERT INTO circulars_fts (circular_id_raw, subject, body)
         VALUES (?, ?, ?)
         """,
         (
-            circular_id,
+            circular_id_raw,
             subject,
             body
         ),

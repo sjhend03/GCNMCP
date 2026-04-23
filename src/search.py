@@ -12,7 +12,7 @@ def row_to_result(row: sqlite3.Row) -> dict[str, Any]:
     Convert a SQLite row into a plain Python dict for search results.
     """
     return {
-        "circular_id": row["circular_id"],
+        "circular_id": row["circular_id_raw"],
         "primary_event": row["primary_event_raw"],
         "primary_event_norm": row["primary_event_norm"],
         "subject": row["subject"],
@@ -57,7 +57,7 @@ def search_circulars(
     if keyword_query:
         sql = """
         SELECT DISTINCT
-            c.circular_id,
+            c.circular_id_raw,
             c.primary_event_raw,
             c.primary_event_norm,
             c.subject,
@@ -70,8 +70,8 @@ def search_circulars(
                 ELSE 1
             END AS score
         FROM circulars_fts
-        JOIN circulars c ON circulars_fts.rowid = c.circular_id
-        LEFT JOIN circular_events e ON e.circular_id = c.circular_id
+        JOIN circulars c ON circulars_fts.rowid = c.circular_id_int
+        LEFT JOIN circular_events e ON e.circular_id_raw = c.circular_id_raw
         WHERE circulars_fts MATCH ?
         """
         params: list[Any] = [event_norm, event_norm, parse_fts_terms(keyword_query)]
@@ -83,7 +83,7 @@ def search_circulars(
     else:
         sql = """
         SELECT DISTINCT
-            c.circular_id,
+            c.circular_id_raw,
             c.primary_event_raw,
             c.primary_event_norm,
             c.subject,
@@ -96,7 +96,7 @@ def search_circulars(
                 ELSE 1
             END AS score
         FROM circulars c
-        LEFT JOIN circular_events e ON e.circular_id = c.circular_id
+        LEFT JOIN circular_events e ON e.circular_id_raw = c.circular_id_raw
         WHERE 1=1
         """
         params = [event_norm, event_norm]
@@ -105,7 +105,7 @@ def search_circulars(
             sql += " AND (c.primary_event_norm = ? OR e.event_norm = ?)"
             params.extend([event_norm, event_norm])
 
-    sql += " ORDER BY score DESC, c.created_on DESC, c.circular_id DESC LIMIT ?"
+    sql += " ORDER BY score DESC, c.created_on DESC, c.circular_id_raw DESC LIMIT ?"
     params.append(limit)
 
     rows = connection.execute(sql, params).fetchall()
@@ -137,7 +137,7 @@ def get_circular(
     row = connection.execute(
         """
         SELECT
-            c.circular_id,
+            c.circular_id_raw,
             c.primary_event_raw,
             c.primary_event_norm,
             c.subject,
@@ -146,7 +146,7 @@ def get_circular(
             c.body AS snippet,
             0 AS score
         FROM circulars c
-        WHERE c.circular_id = ?
+        WHERE c.circular_id_int = ?
         """,
         (circular_id,),
     ).fetchone()

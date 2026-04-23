@@ -31,7 +31,7 @@ sys.modules["ollama"] = fake_ollama_module
 
 
 from src.indexer import ingest_path
-import src.tools as tools
+import tools as tools
 
 
 def make_record(

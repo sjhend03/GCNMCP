@@ -151,6 +151,9 @@ async def list_tools() -> List[Tool]:
 
 
 async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
+    if name == "ping_python":
+        return [TextContext(text=json.dumps({"message": "pong from python"}, ensure_ascii=False))]
+    
     if name == "fetch_gcn_circulars":
         results = load_circular_files(
             arguments.get("data_dir", DEFAULT_DATA_DIR),
@@ -188,38 +191,38 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[Any]:
         model_name = arguments.get("model", "mistral")
 
         system_prompt = """
-You are an astrophysicist analyzing GCN circulars about astronomical observations.
+        You are an astrophysicist analyzing GCN circulars about astronomical observations.
 
-Your task:
-1. Determine if the circular is about a GRB (Gamma-Ray Burst)
-- Look for "GRB" in the subject line or body
-- Look for GRB designations like "GRB 970828", "GRB970828", etc.
+        Your task:
+        1. Determine if the circular is about a GRB (Gamma-Ray Burst)
+        - Look for "GRB" in the subject line or body
+        - Look for GRB designations like "GRB 970828", "GRB970828", etc.
 
-2. Determine if a redshift (z) measurement is reported
-- Look for explicit mentions: "z =", "redshift", "z~", "at z of"
-- Common phrases: "spectroscopic redshift", "photometric redshift"
-- If no redshift is mentioned, has_redshift should be False
+        2. Determine if a redshift (z) measurement is reported
+        - Look for explicit mentions: "z =", "redshift", "z~", "at z of"
+        - Common phrases: "spectroscopic redshift", "photometric redshift"
+        - If no redshift is mentioned, has_redshift should be False
 
-CRITICAL: If you see "GRB" followed by a date (like "GRB 970828"), that IS a GRB event.
-CRITICAL: When returning the grb_name DO NOT INCLUDE GRB, just the number and letter combo.
+        CRITICAL: If you see "GRB" followed by a date (like "GRB 970828"), that IS a GRB event.
+        CRITICAL: When returning the grb_name DO NOT INCLUDE GRB, just the number and letter combo.
 
-Return ONLY valid JSON in this exact format:
-{
-    "is_grb": true,
-    "grb_name": "071028B",
-    "has_redshift": false,
-    "z": null,
-    "z_err": null,
-    "confidence": 0.95,
-    "notes": "Brief explanation of your analysis"
-}
-"""
+        Return ONLY valid JSON in this exact format:
+        {
+            "is_grb": true,
+            "grb_name": "071028B",
+            "has_redshift": false,
+            "z": null,
+            "z_err": null,
+            "confidence": 0.95,
+            "notes": "Brief explanation of your analysis"
+        }
+        """
 
         prompt = f"""
-Analyze this GCN circular and determine whether it is about a GRB and whether it reports a redshift:
+        Analyze this GCN circular and determine whether it is about a GRB and whether it reports a redshift:
 
-{json.dumps(content, ensure_ascii=False)}
-"""
+        {json.dumps(content, ensure_ascii=False)}
+        """
 
         res = ollama.chat(
             model=model_name,
@@ -269,6 +272,37 @@ Analyze this GCN circular and determine whether it is about a GRB and whether it
             "match": match.group(1) if match else None,
             "subject": subject
         }, ensure_ascii=False))]
+    
+    if name == "extract_wavelength":
+        body = arguments.get("body")
+
+        if not body:
+            return [TextContext(text="No body to extract wavelength")]
+        
+        try:
+            body = json.load(body)
+        except Exception as e:
+            return [TextContext(text=f"Error parsing body: {e}")]
+
+        system_prompt = """
+
+        """
+
+        prompt = """
+
+        """
+
+        res = ollama.chat(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        raw = res["message"]["content"].strip()
+
+        return [TextContext()]
 
     return [TextContext(text=json.dumps({"error": f"Unknown tool: {name}"}))]
 

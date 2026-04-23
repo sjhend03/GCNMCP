@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import type { PythonBridgeRequest, PythonBridgeResponse } from "./bridge_types.js";
+import type {
+  PythonBridgeRequest,
+  PythonBridgeResponse,
+} from "./bridge_types.js";
 import {
   PythonBridgeError,
   PythonBridgeLaunchError,
@@ -70,7 +73,9 @@ export async function callPythonTool(
       } catch (parseErr) {
         rejectPromise(
           new PythonBridgeParseError(
-            `Failed to parse Python output as JSON. Output: ${out}. Stderr: ${err}. Parse error: ${(parseErr as Error).message}`
+            `Failed to parse Python output as JSON. Output: ${out}. Stderr: ${err}. Parse error: ${
+              (parseErr as Error).message
+            }`
           )
         );
         return;
