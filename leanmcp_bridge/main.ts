@@ -10,12 +10,14 @@ const serverFactory = () => {
         logging: true,
     });
 
+    // Attach GcnService to the server
     server.registerService(new GcnService());
     return server.getServer();
 };
 
 const port = Number(process.env.PORT || 3001);
 
+// Use LeanMCP's server creation tool to take case of everything else
 await createHTTPServer(serverFactory, {
     port,
     cors: true,

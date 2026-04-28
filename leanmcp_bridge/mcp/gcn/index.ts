@@ -1,86 +1,11 @@
-import { Optional, SchemaConstraint, Tool } from "@leanmcp/core";
+import { Tool } from "@leanmcp/core";
 import { callPythonTool } from "../../bridge/python_bridge.js";
-
-class EmptyInput {}
-
-class FetchGcnCircularsInput {
-  @SchemaConstraint({
-    description: "Start index (0-based, inclusive)",
-    minimum: 0,
-  })
-  start_index!: number;
-
-  @SchemaConstraint({
-    description: "End index (exclusive)",
-    minimum: 1,
-  })
-  end_index!: number;
-
-  @Optional()
-  @SchemaConstraint({
-    description: "Optional directory containing circular JSON files",
-  })
-  data_dir?: string;
-}
-
-class SearchGcnCircularsInput {
-  @SchemaConstraint({
-    description: "Keyword query text",
-    minLength: 1,
-  })
-  query!: string;
-
-  @Optional()
-  @SchemaConstraint({
-    description: "Optional exact event filter, e.g. GRB 260120B or EP260119a",
-  })
-  event?: string;
-
-  @Optional()
-  @SchemaConstraint({
-    description: "Maximum results",
-    minimum: 1,
-    maximum: 100,
-    default: 10,
-  })
-  limit?: number;
-}
-
-class FetchAndCheckCircularForGrbInput {
-  @SchemaConstraint({
-    description: "Raw circular file index",
-    minimum: 0,
-  })
-  index!: number;
-
-  @Optional()
-  @SchemaConstraint({
-    description: "Ollama model name",
-    default: "mistral",
-  })
-  model?: string;
-
-  @Optional()
-  @SchemaConstraint({
-    description: "Optional directory containing circular JSON files",
-  })
-  data_dir?: string;
-}
-
-class CheckForGrbRegexInput {
-  @SchemaConstraint({
-    description: "Raw circular file index",
-    minimum: 0,
-  })
-  index!: number;
-
-  @Optional()
-  @SchemaConstraint({
-    description: "Optional directory containing circular JSON files",
-  })
-  data_dir?: string;
-}
-
+import { EmptyInput, 
+         FetchAndCheckCircularForGrbInput, 
+         FetchGcnCircularsInput,
+         SearchGcnCircularsInput,
+         CheckForGrbRegexInput,
+       } from "./input_schema.js"
 function unwrapPythonTextItems(result: unknown): string[] {
   const items = Array.isArray(result) ? result : [result];
 
@@ -102,6 +27,10 @@ function unwrapPythonTextItems(result: unknown): string[] {
 }
 
 export class GcnService {
+  /* GCN server service which contains each tool,
+   * if adding a tool, make a input schema then add it 
+   * here.
+   */
   @Tool({
     description: "Simple TypeScript ping for testing LeanMCP",
     inputClass: EmptyInput,
